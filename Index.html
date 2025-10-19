@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>RPG · Procedural</title>
+<style>
+  :root{--tile:32}
+  html,body{height:100%;margin:0;background:#071018;display:flex;align-items:center;justify-content:center;font-family:Inter,system-ui,Segoe UI,Roboto,Arial}
+  canvas{image-rendering:pixelated;background:#08121a;border-radius:8px}
+  .hud{position:fixed;left:50%;transform:translateX(-50%);bottom:12px;width:92%;max-width:980px;display:flex;gap:12px;align-items:center;background:linear-gradient(180deg,#0f1a22,#081218);padding:12px;border-radius:12px;color:#e7fbff}
+  .btn{padding:8px 12px;border-radius:8px;background:#2b3b42;color:#fff;border:0;cursor:pointer}
+  .dpad{display:grid;grid-template-columns:64px 64px 64px;grid-template-rows:64px 64px 64px;gap:8px}
+  .dir{display:flex;align-items:center;justify-content:center;background:#16303a;border-radius:10px;color:#dff6ff;width:64px;height:64px;cursor:pointer;user-select:none}
+  .panel{display:flex;gap:10px;align-items:center}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hud">
+  <div class="panel">
+    <div id="hp">HP: 10/10</div>
+    <div id="atk">ATK: 2</div>
+    <div id="lvl">Lvl:1 XP:0/20</div>
+    <div id="gold">Gold:0</div>
+  </div>
+  <div style="flex:1"></div>
+  <div class="dpad" id="dpad">
+    <div></div><div class="dir" data-dir="up">▲</div><div></div>
+    <div class="dir" data-dir="left">◀</div><div class="dir" data-dir="down">▼</div><div class="dir" data-dir="right">▶</div>
+    <div></div><div class="dir" id="center">•</div><div></div>
+  </div>
+  <div style="width:12px"></div>
+  <div><button id="shop" class="btn">Tienda</button></div>
+</div>
+
+<script type="module">
+import * as WorldGen from './worldgen.js';
+
+const TILE = 32, VIEW_TILES = 25, VIEW_HALF = Math.floor(VIEW_TILES/2), VIEW_W = TILE*VIEW_TILES, VIEW_H = TILE*VIEW_TILES;
+const canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
+canvas.width = VIEW_W; canvas.height = VIEW_H; canvas.style.width = VIEW_W + 'px'; canvas.style.height = VIEW_H + 'px';
+ctx.imageSmoothingEnabled = false; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+WorldGen.init({ seed: 'flu-modular', worldSize: 500 });
+
+const player = { emoji:'🛡', x:0, y:0, px:0, py:0, level:1, xp:0, maxHp:10, hp:10, atk:2, def:0, gold:0 };
+function xpToLevel(l){ return l*20; }
+
+WorldGen.preGenerateVisible(0,0, VIEW_HALF, player.level);
+
+function draw(){
+  const sx = player.x - VIEW_HALF, sy = player.y - VIEW_HALF;
+  for(let y=0; y<VIEW_TILES; y++){
+    for(let x=0; x<VIEW_TILES; x++){
+      const wx = sx + x, wy = sy + y;
+      const tile = WorldGen.getTile(wx,wy);
+      ctx.fillStyle = WorldGen.biomes[tile.biome] || '#333';
+      ctx.fillRect(x*TILE, y*TILE, TILE, TILE);
+    }
+  }
+  ctx.font = `${Math.floor(TILE*0.9)}px "Segoe UI Emoji"`;
+  for(let y=0;y<VIEW_TILES;y++){
+    for(let x=0;x<VIEW_TILES;x++){
+      const wx = sx + x, wy = sy + y;
+      const en = WorldGen.getEnemy(wx,wy);
+      if(en) ctx.fillText(en.emoji, x*TILE + TILE/2, y*TILE + TILE/2 + 2);
+    }
+  }
+  ctx.fillText(player.emoji, VIEW_HALF*TILE + TILE/2, VIEW_HALF*TILE + TILE/2 + 2);
+  updateHUD();
+}
+function updateHUD(){
+  document.getElementById('hp').innerText = `HP: ${player.hp}/${player.maxHp}`;
+  document.getElementById('atk').innerText = `ATK: ${player.atk}`;
+  document.getElementById('lvl').innerText = `Lvl:${player.level} XP:${player.xp}/${xpToLevel(player.level)}`;
+  document.getElementById('gold').innerText = `Gold:${player.gold}`;
+}
+
+function move(dx,dy){
+  if(inCombat) return;
+  player.px = player.x; player.py = player.y;
+  player.x += dx; player.y += dy;
+  WorldGen.preGenerateVisible(player.x, player.y, VIEW_HALF, player.level);
+  const enemy = WorldGen.getEnemy(player.x, player.y);
+  if(enemy) startCombat(player.x, player.y, JSON.parse(JSON.stringify(enemy)));
+  else draw();
+}
+
+window.addEventListener('keydown', e=>{
+  const k = e.key.toLowerCase();
+  if(k==='w'||k==='arrowup') move(0,-1);
+  if(k==='s'||k==='arrowdown') move(0,1);
+  if(k==='a'||k==='arrowleft') move(-1,0);
+  if(k==='d'||k==='arrowright') move(1,0);
+});
+
+document.querySelectorAll('#dpad .dir[data-dir]').forEach(b=>{
+  let iv = null;
+  const dir = b.getAttribute('data-dir');
+  const step = ()=>{
+    if(dir==='up') move(0,-1);
+    if(dir==='down') move(0,1);
+    if(dir==='left') move(-1,0);
+    if(dir==='right') move(1,0);
+  };
+  b.addEventListener('pointerdown', ev=>{ ev.preventDefault(); step(); iv = setInterval(step, 160); });
+  ['pointerup','pointercancel','pointerleave'].forEach(ev => b.addEventListener(ev, ()=>{ if(iv) clearInterval(iv); iv = null; }));
+});
+
+let inCombat = false, currentEnemy = null, enemyTilePos = null, defendFlag = false;
+function startCombat(tx,ty,enemy){
+  inCombat = true; currentEnemy = enemy; enemyTilePos = {x:tx,y:ty};
+  combatLoop();
+}
+function combatLoop(){
+  if(!inCombat || !currentEnemy) return;
+  const choice = prompt(`Combate: ${currentEnemy.name} Lvl ${currentEnemy.level}\nHP ${currentEnemy.hp}/${currentEnemy.maxHp}\nElige: 1 Atacar  2 Defender  3 Atq+Esc`,'1');
+  if(choice === null){ endCombat(); return; }
+  const c = parseInt(choice[0]||'1',10);
+  if(c === 1){
+    const dmg = Math.max(1, player.atk);
+    currentEnemy.hp = Math.max(0, currentEnemy.hp - dmg);
+    alert(`Le haces ${dmg} daño.`);
+    if(currentEnemy.hp <= 0){ winEnemy(); return; }
+    enemyTurn();
+  } else if(c === 2){
+    defendFlag = true;
+    enemyTurn();
+  } else {
+    const quick = Math.max(1, Math.floor(player.atk*0.6));
+    currentEnemy.hp = Math.max(0, currentEnemy.hp - quick);
+    alert(`Ataque rápido: ${quick} daño.`);
+    if(currentEnemy.hp <= 0){ winEnemy(); return; }
+    if(Math.random() < 0.6){ alert('Escape exitoso.'); player.x = player.px; player.y = player.py; endCombat(); return; }
+    else { alert('Escape fallido.'); enemyTurn(); }
+  }
+}
+function enemyTurn(){
+  if(!inCombat || !currentEnemy) return;
+  let dmg = currentEnemy.dmg || 1;
+  if(defendFlag) dmg = Math.max(0, Math.floor(dmg/2));
+  player.hp = Math.max(0, player.hp - dmg);
+  defendFlag = false;
+  if(player.hp <= 0){ alert('Has sido derrotado. Respawn centro.'); respawn(); return; }
+  combatLoop();
+}
+function winEnemy(){
+  alert(`Derrotaste a ${currentEnemy.name}. Ganas XP y oro.`);
+  const baseXP = Math.max(1, Math.round(currentEnemy.maxHp + currentEnemy.dmg*2));
+  player.xp += baseXP;
+  player.gold += Math.max(1, Math.round(currentEnemy.level * (2 + Math.floor(Math.random()*4))));
+  WorldGen._world.enemies.set(`${enemyTilePos.x},${enemyTilePos.y}`, null);
+  while(player.xp >= xpToLevel(player.level)){
+    player.xp -= xpToLevel(player.level);
+    player.level += 1; player.maxHp += 5; player.atk += 1; player.def += 1; player.hp = player.maxHp;
+    alert(`¡Subiste a nivel ${player.level}!`);
+  }
+  endCombat();
+}
+function endCombat(){ inCombat = false; currentEnemy = null; enemyTilePos = null; draw(); }
+function respawn(){
+  player.level = 1; player.xp = 0; player.gold = Math.max(0, Math.floor(player.gold/2));
+  player.maxHp = 10; player.hp = player.maxHp; player.atk = 2; player.def = 0;
+  player.x = 0; player.y = 0;
+  endCombat();
+}
+
+document.getElementById('shop').addEventListener('click', ()=> {
+  const buy = prompt('Tienda: 1) +10% XP (50g) 2) +5 MaxHP (30g) 3) +1 ATK (40g)\nElige 1/2/3','1');
+  if(!buy) return;
+  const c = parseInt(buy[0]||'1',10);
+  if(c===1 && player.gold>=50){ player.gold-=50; player.xp *= 1.1; alert('Comprado XP'); }
+  else if(c===2 && player.gold>=30){ player.gold-=30; player.maxHp +=5; player.hp +=5; alert('Comprado HP'); }
+  else if(c===3 && player.gold>=40){ player.gold-=40; player.atk +=1; alert('Comprado ATK'); }
+  else alert('Oro insuficiente o cancelado.');
+  updateHUD();
+});
+
+draw();
+updateHUD();
+</script>
+</body>
+  </html>
